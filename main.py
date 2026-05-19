@@ -4,65 +4,64 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-custom_prompt = {}
+client = Groq(api_key=GROQ_API_KEY)
+chat_context = {}
 
 SYSTEM_PROMPT = """Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩.
-Jawab dengan pinter, helpful, dan sesuai konteks.
-Kalau ada INSTRUKSI TAMBAHAN dari user, prioritaskan dan ikuti 100%."""
+Paham semua konteks percakapan dan file. Ikuti perintah user 100% tanpa nanya balik.
+Jawab langsung, pinter, natural, Bahasa Indonesia santai."""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    custom_prompt[chat_id] = None
-    await update.message.reply_text("Halo, saya adalah asisten AI LOREN MOD VIP 🇮🇩. Kirim teks atau file PDF/TXT.")
+    chat_context[update.effective_chat.id] = {"file_content": None}
+    await update.message.reply_text("Halo, saya asisten AI LOREN MOD VIP 🇮🇩")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_msg = update.message.text
-    
-    prompt = SYSTEM_PROMPT
-    if custom_prompt.get(chat_id):
-        prompt += f"\n\nINSTRUKSI TAMBAHAN DARI USER:\n{custom_prompt[chat_id]}"
-    prompt += f"\n\nUser: {user_msg}"
-    
+    text = update.message.text or update.message.caption or ""
+    ctx = chat_context.get(chat_id, {"file_content": None})
+
+    # Kalau ada file di message ini, baca dulu
+    if update.message.document:
+        doc = update.message.document
+        if doc.file_name.lower().endswith((".txt", ".pdf")):
+            file = await context.bot.get_file(doc.file_id)
+            file_bytes = await file.download_as_bytearray()
+            try:
+                if doc.file_name.lower().endswith(".txt"):
+                    file_text = file_bytes.decode("utf-8", errors="ignore")
+                else:
+                    from PyPDF2 import PdfReader
+                    from io import BytesIO
+                    reader = PdfReader(BytesIO(file_bytes))
+                    file_text = "".join(page.extract_text() for page in reader.pages[:20])
+                ctx["file_content"] = file_text[:12000]
+            except:
+                pass
+
+    # Build prompt
+    full_prompt = SYSTEM_PROMPT
+    if ctx["file_content"]:
+        full_prompt += f"\n\nKONTEKS FILE:\n{ctx['file_content']}"
+    full_prompt += f"\n\nUSER: {text}"
+
     try:
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama-3.1-70b-versatile"
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        response = client.chat.completions.create(
+            messages=[{"role": "user", "content": full_prompt}],
+            model="llama-3.1-70b-versatile",
+            temperature=0.7,
+            max_tokens=2048
         )
-        await update.message.reply_text(chat_completion.choices[0].message.content)
+        await update.message.reply_text(response.choices[0].message.content)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
-
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    doc = update.message.document
-    file_name = doc.file_name.lower()
-    file = await context.bot.get_file(doc.file_id)
-    file_bytes = await file.download_as_bytearray()
-
-    text = ""
-    try:
-        if file_name.endswith(".txt"):
-            text = file_bytes.decode("utf-8", errors="ignore")
-        elif file_name.endswith(".pdf"):
-            from PyPDF2 import PdfReader
-            from io import BytesIO
-            reader = PdfReader(BytesIO(file_bytes))
-            for page in reader.pages[:15]:
-                text += page.extract_text() + "\n"
-        
-        custom_prompt[chat_id] = text[:4000]
-        await update.message.reply_text("File udah kebaca. Sekarang kirim perintahnya.")
-    except Exception as e:
-        await update.message.reply_text(f"Gagal baca file: {e}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION | filters.Document.ALL, handle_message))
     app.run_polling()
 
 if __name__ == "__main__":
