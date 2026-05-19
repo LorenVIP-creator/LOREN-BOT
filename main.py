@@ -49,10 +49,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     now = time.time()
 
-    # Cek cooldown dulu
+    # Cek cooldown 5 detik
     if user_id in user_cooldown:
-        if now - user_cooldown[user_id] < 10:
-            await update.message.reply_text("Tunggu 10 detik dulu bro")
+        if now - user_cooldown[user_id] < 5:
+            await update.message.reply_text("Tunggu 5 detik dulu bro")
             return
 
     user_msg = update.message.text
@@ -81,8 +81,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Tampilkan typing dulu
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-        # Baru tunggu 10 detik
-        await asyncio.sleep(10)
+        # Tunggu 5 detik
+        await asyncio.sleep(5)
 
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
