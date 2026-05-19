@@ -71,8 +71,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_bytes = await file.download_as_bytearray()
     base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
-    history_clean = [m for m in chat_history.get(chat_id, []) if isinstance(m["content"], str)]
-    messages_for_api = build_messages(chat_id, history_clean)
+    messages_for_api = build_messages(chat_id, get_text_history(chat_id))
     messages_for_api.append({
         "role": "user",
         "content": [
@@ -91,6 +90,11 @@ def build_messages(chat_id, history):
     messages.extend(history)
     return messages
 
+def get_text_history(chat_id):
+    """Ambil cuma pesan teks, buang yang format gambar biar gak error 400"""
+    hist = chat_history.get(chat_id, [])
+    return [m for m in hist if isinstance(m.get("content"), str)]
+
 def add_to_history(chat_id, message):
     if chat_id not in chat_history:
         chat_history[chat_id] = []
@@ -99,7 +103,7 @@ def add_to_history(chat_id, message):
         chat_history[chat_id] = chat_history[chat_id][-MAX_HISTORY:]
 
 async def query_groq(update: Update, chat_id):
-    messages = build_messages(chat_id, chat_history.get(chat_id, []))
+    messages = build_messages(chat_id, get_text_history(chat_id))
     await query_groq_with_messages(update, messages)
 
 async def query_groq_with_messages(update: Update, messages):
@@ -120,7 +124,7 @@ async def query_groq_with_messages(update: Update, messages):
             reply = resp.json()["choices"][0]["message"]["content"]
 
         chat_id = update.effective_chat.id
-        if len(messages) > 0 and isinstance(messages[-1]["content"], str):
+        if len(messages) > 0 and isinstance(messages[-1].get("content"), str):
             add_to_history(chat_id, {"role": "assistant", "content": reply})
 
         await update.message.reply_text(reply)
