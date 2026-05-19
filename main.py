@@ -87,7 +87,7 @@ async def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     print("Bot AI jalan...")
-     app.run_polling()
+    app.run_polling()
 
 if __name__ == "__main__":
     import asyncio
