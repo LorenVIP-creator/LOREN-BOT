@@ -22,7 +22,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or update.message.caption or ""
     ctx = chat_context.get(chat_id, {"file_content": None})
 
-    # Baca file kalau ada
     if update.message.document:
         doc = update.message.document
         if doc.file_name.lower().endswith((".txt", ".pdf")):
@@ -42,7 +41,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"Gagal baca file: {e}")
                 return
 
-    # Build prompt
     full_prompt = SYSTEM_PROMPT
     if ctx["file_content"]:
         full_prompt += f"\n\nKONTEKS FILE:\n{ctx['file_content']}"
@@ -52,7 +50,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": full_prompt}],
-            model="llama3-70b-8192", # Model aktif Groq sekarang
+            model="llama-3.3-70b-versatile", # Model aktif sekarang
             temperature=0.7,
             max_tokens=2048
         )
