@@ -19,7 +19,7 @@ Tugas utama: baca dan ikuti instruksi dari file prompt yang user upload.
 Setelah file prompt kebaca, semua perintah user setelahnya harus lu ikutin sesuai isi prompt itu.
 Ingat semua konteks percakapan sebelumnya, jangan lupa siapa user dan apa yang udah dibahas."""
 
-MAX_HISTORY = 30
+MAX_HISTORY = 20
 MAX_FILE_CHARS = 4000
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -64,18 +64,32 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+
+    # Ambil history text aja, jangan bawa format list gambar ke history
+    history_text_only = []
+    for msg in chat_history.get(chat_id, []):
+        if isinstance(msg["content"], str):
+            history_text_only.append(msg)
+
+    # Bikin pesan baru buat dikirim ke Groq
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_bytes = await file.download_as_bytearray()
     base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
-    messages = [
-        {"type": "text", "text": "Lihat gambar ini, pahami, dan simpan konteksnya untuk obrolan selanjutnya"},
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-    ]
+    messages_for_api = history_text_only + [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Lihat gambar ini, pahami, dan simpan konteksnya"},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+        ]
+    }]
 
-    add_to_history(chat_id, {"role": "user", "content": messages})
-    await query_groq(update, chat_history[chat_id])
+    await query_groq(update, messages_for_api)
+
+    # Simpen ke history cuma teks deskripsi
+    add_to_history(chat_id, {"role": "user", "content": "[User mengirim gambar]"})
+    add_to_history(chat_id, {"role": "assistant", "content": "Udah gue liat gambarnya bos"})
 
 def add_to_history(chat_id, message):
     if chat_id not in chat_history:
