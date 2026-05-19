@@ -35,10 +35,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     from PyPDF2 import PdfReader
                     from io import BytesIO
                     reader = PdfReader(BytesIO(file_bytes))
-                    file_text = "".join(page.extract_text() for page in reader.pages[:20])
+                    file_text = "".join(page.extract_text() or "" for page in reader.pages[:20])
                 ctx["file_content"] = file_text[:12000]
-            except:
-                pass
+                chat_context[chat_id] = ctx
+            except Exception as e:
+                await update.message.reply_text(f"Gagal baca file: {e}")
+                return
 
     # Build prompt
     full_prompt = SYSTEM_PROMPT
@@ -50,7 +52,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": full_prompt}],
-            model="llama-3.1-70b-versatile",
+            model="llama-3.1-70b-instruct", # Model aktif Groq
             temperature=0.7,
             max_tokens=2048
         )
