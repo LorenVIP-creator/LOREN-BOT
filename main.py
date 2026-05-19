@@ -1,16 +1,16 @@
 import os
-from groq import Groq
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from PyPDF2 import PdfReader
 from io import BytesIO
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-client = Groq(api_key=GROQ_API_KEY)
+model_text = genai.GenerativeModel('gemini-1.5-flash')
+model_vision = genai.GenerativeModel('gemini-1.5-flash')
 
-chat_history = {}
 custom_prompt = {}
 
 SYSTEM_PROMPT = """Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩.
@@ -21,25 +21,21 @@ Kalau ada INSTRUKSI TAMBAHAN dari user, prioritaskan dan ikuti 100%."""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    chat_history[chat_id] = []
     custom_prompt[chat_id] = None
-    await update.message.reply_text("Halo, saya adalah asisten AI LOREN MOD VIP 🇮🇩. Ada yang bisa saya bantu?")
+    await update.message.reply_text("Halo, saya adalah asisten AI LOREN MOD VIP 🇮🇩. Kirim teks, foto, atau file PDF/TXT.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_msg = update.message.text
     
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    prompt = SYSTEM_PROMPT
     if custom_prompt.get(chat_id):
-        messages.append({"role": "system", "content": f"INSTRUKSI TAMBAHAN:\n{custom_prompt[chat_id]}"})
-    messages.append({"role": "user", "content": user_msg})
+        prompt += f"\n\nINSTRUKSI TAMBAHAN DARI USER:\n{custom_prompt[chat_id]}"
+    prompt += f"\n\nUser: {user_msg}"
     
     try:
-        response = client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
-            messages=messages
-        )
-        await update.message.reply_text(response.choices[0].message.content)
+        response = model_text.generate_content(prompt)
+        await update.message.reply_text(response.text)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
@@ -51,18 +47,31 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_bytes = await file.download_as_bytearray()
 
     text = ""
-    if file_name.endswith(".txt"):
-        text = file_bytes.decode("utf-8", errors="ignore")
-    elif file_name.endswith(".pdf"):
-        reader = PdfReader(BytesIO(file_bytes))
-        for page in reader.pages[:10]:
-            text += page.extract_text() + "\n"
-
-    custom_prompt[chat_id] = text[:4000]
-    await update.message.reply_text("File sudah saya baca. Silakan beri perintah.")
+    try:
+        if file_name.endswith(".txt"):
+            text = file_bytes.decode("utf-8", errors="ignore")
+        elif file_name.endswith(".pdf"):
+            reader = PdfReader(BytesIO(file_bytes))
+            for page in reader.pages[:15]:
+                text += page.extract_text() + "\n"
+        
+        custom_prompt[chat_id] = text[:4000]
+        await update.message.reply_text("File udah kebaca. Sekarang kirim perintahnya.")
+    except Exception as e:
+        await update.message.reply_text(f"Gagal baca file: {e}")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Maaf, versi Groq belum support baca gambar. Pakai Gemini kalau mau fitur foto.")
+    chat_id = update.effective_chat.id
+    caption = update.message.caption or "Jelaskan gambar ini"
+    photo = update.message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    file_bytes = await file.download_as_bytearray()
+    
+    try:
+        response = model_vision.generate_content([caption, {"mime_type": "image/jpeg", "data": file_bytes}])
+        await update.message.reply_text(response.text)
+    except Exception as e:
+        await update.message.reply_text(f"Error: {e}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
