@@ -1,17 +1,14 @@
 import os
-import base64
+from groq import Groq
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from PyPDF2 import PdfReader
 from io import BytesIO
-import google.generativeai as genai
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-genai.configure(api_key=GEMINI_API_KEY)
-model_text = genai.GenerativeModel('gemini-1.5-flash')
-model_vision = genai.GenerativeModel('gemini-1.5-flash')
+client = Groq(api_key=GROQ_API_KEY)
 
 chat_history = {}
 custom_prompt = {}
@@ -32,14 +29,17 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_msg = update.message.text
     
-    full_prompt = SYSTEM_PROMPT
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if custom_prompt.get(chat_id):
-        full_prompt += f"\n\nINSTRUKSI TAMBAHAN DARI USER:\n{custom_prompt[chat_id]}"
-    full_prompt += f"\n\nUser: {user_msg}"
+        messages.append({"role": "system", "content": f"INSTRUKSI TAMBAHAN:\n{custom_prompt[chat_id]}"})
+    messages.append({"role": "user", "content": user_msg})
     
     try:
-        response = model_text.generate_content(full_prompt)
-        await update.message.reply_text(response.text)
+        response = client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
+            messages=messages
+        )
+        await update.message.reply_text(response.choices[0].message.content)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
@@ -62,17 +62,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("File sudah saya baca. Silakan beri perintah.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    caption = update.message.caption or "Jelaskan gambar ini"
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    file_bytes = await file.download_as_bytearray()
-    
-    try:
-        response = model_vision.generate_content([caption, {"mime_type": "image/jpeg", "data": file_bytes}])
-        await update.message.reply_text(response.text)
-    except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+    await update.message.reply_text("Maaf, versi Groq belum support baca gambar. Pakai Gemini kalau mau fitur foto.")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
