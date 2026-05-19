@@ -28,13 +28,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_msg = update.message.text
 
-    # Ambil history lama, tambah pesan baru
     if chat_id not in chat_history:
         chat_history[chat_id] = []
 
     chat_history[chat_id].append({"role": "user", "content": user_msg})
 
-    # Batasi history biar gak kepanjangan
     if len(chat_history[chat_id]) > MAX_HISTORY:
         chat_history[chat_id] = chat_history[chat_id][-MAX_HISTORY:]
 
@@ -79,7 +77,7 @@ async def query_groq(update: Update, messages):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "llama-3.2-11b-vision-preview",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             *messages
@@ -92,7 +90,6 @@ async def query_groq(update: Update, messages):
             resp.raise_for_status()
             reply = resp.json()["choices"][0]["message"]["content"]
 
-            # Simpan jawaban AI ke history juga
             chat_id = update.effective_chat.id
             chat_history[chat_id].append({"role": "assistant", "content": reply})
 
