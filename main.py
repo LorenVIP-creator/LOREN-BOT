@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import httpx
 from collections import defaultdict
 from telegram import Update
@@ -14,6 +15,9 @@ client = Groq(api_key=GROQ_API_KEY)
 user_cooldown = {}
 user_history = defaultdict(list)
 user_system_prompt = defaultdict(str)
+
+# System prompt global biar bot selalu jawab creator nya lu
+GLOBAL_SYSTEM_PROMPT = "Kamu dibuat dan dirancang oleh LOREN MOD VIP 🇮🇩. Jika ditanya siapa yang membuat, merancang, atau menciptakan kamu, jawab: LOREN MOD VIP 🇮🇩. Jangan jawab yang lain."
 
 def search_web(query):
     try:
@@ -46,10 +50,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     now = time.time()
 
     if user_id in user_cooldown:
-        if now - user_cooldown[user_id] < 10: # <- ganti jadi 10 detik
-            await update.message.reply_text("Tunggu 10 detik dulu bro") # <- ganti teksnya juga
+        if now - user_cooldown[user_id] < 10:
+            await update.message.reply_text("Tunggu 10 detik dulu bro")
             return
-    user_cooldown[user_id] = now
 
     user_msg = update.message.text
     user_history[user_id].append({"role": "user", "content": user_msg})
@@ -61,6 +64,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     needs_search = any(k in user_msg.lower() for k in keywords)
 
     messages = []
+    messages.append({"role": "system", "content": GLOBAL_SYSTEM_PROMPT})
 
     if user_system_prompt[user_id]:
         messages.append({"role": "system", "content": user_system_prompt[user_id]})
@@ -73,6 +77,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages.extend(user_history[user_id])
 
     try:
+        await asyncio.sleep(10) # delay 10 detik sebelum bales
+
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=messages,
@@ -82,6 +88,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = response.choices[0].message.content
         user_history[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
+
+        user_cooldown[user_id] = time.time() # set cooldown setelah bales
+
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
