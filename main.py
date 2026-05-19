@@ -26,12 +26,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
-    # Init context kalau belum ada
     if chat_id not in chat_context:
         chat_context[chat_id] = {"system_prompt": DEFAULT_PROMPT, "history": []}
     ctx = chat_context[chat_id]
 
-    # 1. Upload file.txt = ganti prompt
+    # Upload file.txt = ganti prompt
     if update.message.document and update.message.document.file_name.lower().endswith(".txt"):
         file = await context.bot.get_file(update.message.document.file_id)
         file_bytes = await file.download_as_bytearray()
@@ -47,7 +46,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
-        # 2. Kalau ada foto, kirim tanpa history biar gak error
+        # Kalau ada foto, kirim tanpa history biar gak error 400
         if update.message.photo:
             photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
             photo_bytes = await photo_file.download_as_bytearray()
@@ -59,7 +58,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
             messages.append({"role": "user", "content": content})
 
-        # 3. Kalau cuma teks, baru pake history
+        # Kalau cuma teks, baru pake history biar nyambung
         else:
             messages.extend(ctx["history"][-10:])
             messages.append({"role": "user", "content": user_text})
