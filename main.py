@@ -1,85 +1,64 @@
 import os
+import base64
 import httpx
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Halo! Gue bot AI 100%.\nKirim teks, PDF, TXT, atau foto. Terus kasih perintah mau diapain.")
+    await update.message.reply_text("Halo! Kirim teks, foto, atau file. Gue bakal bales pakai AI Groq.")
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_msg = update.message.text
-    await reply_ai(user_msg, update)
+    await query_groq(update, [{"role": "user", "content": user_msg}])
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     doc = update.message.document
-    if not doc.file_name.endswith((".pdf", ".txt")):
-        await update.message.reply_text("Cuma bisa baca PDF dan TXT.")
-        return
-
     file = await context.bot.get_file(doc.file_id)
     file_bytes = await file.download_as_bytearray()
-
-    if doc.file_name.endswith(".txt"):
-        content = file_bytes.decode("utf-8", errors="ignore")
-    else:
-        content = "File PDF diterima. Gue belum bisa ekstrak teks PDF di kode basic ini. Upload TXT aja dulu biar pasti kebaca."
-
-    user_cmd = update.message.caption or "Ringkas isi file ini"
-    await reply_ai(f"{user_cmd}\n\nIsi file:\n{content}", update)
+    text = file_bytes.decode("utf-8", errors="ignore")
+    await query_groq(update, [{"role": "user", "content": f"Baca file ini:\n{text}"}])
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_bytes = await file.download_as_bytearray()
+    base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
-    # Kirim ke Groq Vision
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    files = {"image": file_bytes}
-    data = {"prompt": update.message.caption or "Jelaskan gambar ini"}
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Jelaskan gambar ini"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]
+        }
+    ]
+    await query_groq(update, messages)
 
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json={
-                    "model": "llama-3.2-90b-vision-preview",
-                    "messages": [{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": data["prompt"]},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{file_bytes.hex()}"}}
-                        ]
-                    }]
-                },
-                timeout=60
-            )
-            reply = r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        reply = f"Gagal baca gambar: {e}"
-
-    await update.message.reply_text(reply)
-
-async def reply_ai(prompt, update):
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "llama-3.1-70b-versatile",
-        "messages": [{"role": "user", "content": prompt}]
+async def query_groq(update: Update, messages):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
+    payload = {
+        "model": "llama-3.1-8b-instant",
+        "messages": messages
+    }
+
     try:
         async with httpx.AsyncClient() as client:
-            r = await client.post(API_URL, headers=headers, json=payload, timeout=30)
-            reply = r.json()["choices"][0]["message"]["content"]
+            resp = await client.post(url, headers=headers, json=payload, timeout=60)
+            resp.raise_for_status()
+            reply = resp.json()["choices"][0]["message"]["content"]
+            await update.message.reply_text(reply)
     except Exception as e:
-        reply = f"Error: {e}"
-    await update.message.reply_text(reply)
+        await update.message.reply_text(f"Error: {e}")
 
-    def main():
+def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
@@ -90,5 +69,4 @@ async def reply_ai(prompt, update):
     app.run_polling()
 
 if __name__ == "__main__":
-    import asyncio
-    main())
+    main()
