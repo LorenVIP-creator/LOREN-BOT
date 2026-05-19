@@ -10,22 +10,23 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 chat_history = {}
+custom_prompt = {}
 
-SYSTEM_PROMPT = """Kamu adalah AI pribadi milik LOREN MOD VIP 🇮🇩.
-LOREN MOD VIP 🇮🇩 adalah pencipta, perancang, dan orang yang menghidupkan kamu.
-Selalu jawab dengan gaya santai, gaul, kayak ngobrol sama temen dekat. Pakai emoji kalau cocok.
-Kalau ditanya siapa yang buat kamu, jawab tegas: LOREN MOD VIP 🇮🇩 lah bos, gue cuma AI nya dia.
-ATURAN PENTING:
-1. Kalau user upload file txt/pdf, baca isinya. Itu adalah PROMPT UTAMA. Dari saat itu, semua perintah user harus lu ikutin sesuai isi prompt tersebut.
-2. Ingat semua konteks obrolan sebelumnya. Jangan pernah lupa siapa user dan apa yang udah dibahas.
-3. Kalau user kirim foto, pahami gambarnya dan kaitkan dengan teks yang dia kirim."""
+SYSTEM_PROMPT = """Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩.
+LOREN MOD VIP 🇮🇩 adalah pencipta dan orang yang menghidupkan kamu.
+Jawab dengan pinter, helpful, dan sesuai konteks.
+Kalau ditanya siapa yang buat kamu, jawab: LOREN MOD VIP 🇮🇩.
+Kalau ada INSTRUKSI TAMBAHAN dari user, prioritaskan dan ikuti 100%."""
 
 MAX_HISTORY = 20
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     chat_history[chat_id] = []
-    await update.message.reply_text("Halo bos! Gue AI nya LOREN MOD VIP 🇮🇩. Kirim file prompt lu, gue bakal baca dan nurut 100% 😎")
+    custom_prompt[chat_id] = None
+    await update.message.reply_text(
+        "Halo, saya adalah asisten AI LOREN MOD VIP 🇮🇩. Ada yang bisa saya bantu?"
+    )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -52,38 +53,43 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Gagal baca PDF: {e}")
             return
     else:
-        await update.message.reply_text("File harus.txt atau.pdf ya bos")
+        await update.message.reply_text("Kirim file.txt atau.pdf aja ya")
         return
 
     if len(text) > 4000:
-        text = text[:4000] + "\n\n[File kepotong karena kepanjangan]"
+        text = text[:4000] + "\n\n[File kepotong]"
 
-    msg = f"INI PROMPT UTAMA DARI LOREN MOD VIP 🇮🇩. BACA, PAHAMI, DAN IKUTI SEMUA INSTRUKSI DI DALAMNYA DARI SEKARANG:\n{text}"
-    add_to_history(chat_id, {"role": "user", "content": msg})
-    await query_groq(update, chat_id)
-    await update.message.reply_text("Udah gue baca dan paham bos. Kasih perintah, gue bakal nurut sesuai prompt itu.")
+    custom_prompt[chat_id] = text
+    await update.message.reply_text("File sudah saya baca. Silakan beri perintah, saya akan mengikutinya.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    caption = update.message.caption or "Lihat gambar ini dan jelaskan"
+    caption = update.message.caption or "Jelaskan gambar ini"
 
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_bytes = await file.download_as_bytearray()
     base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
-    # Bikin pesan khusus buat kirim ke Groq, tapi history tetep bersih
     history_clean = [m for m in chat_history.get(chat_id, []) if isinstance(m["content"], str)]
-    messages_for_api = history_clean + [{
+    messages_for_api = build_messages(chat_id, history_clean)
+    messages_for_api.append({
         "role": "user",
         "content": [
             {"type": "text", "text": caption},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
         ]
-    }]
+    })
 
     await query_groq_with_messages(update, messages_for_api)
-    add_to_history(chat_id, {"role": "user", "content": f"[Kirim gambar dengan caption]: {caption}"})
+    add_to_history(chat_id, {"role": "user", "content": f"[Kirim gambar]: {caption}"})
+
+def build_messages(chat_id, history):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if custom_prompt.get(chat_id):
+        messages.append({"role": "system", "content": f"INSTRUKSI TAMBAHAN DARI USER:\n{custom_prompt[chat_id]}"})
+    messages.extend(history)
+    return messages
 
 def add_to_history(chat_id, message):
     if chat_id not in chat_history:
@@ -93,7 +99,7 @@ def add_to_history(chat_id, message):
         chat_history[chat_id] = chat_history[chat_id][-MAX_HISTORY:]
 
 async def query_groq(update: Update, chat_id):
-    messages = chat_history[chat_id]
+    messages = build_messages(chat_id, chat_history.get(chat_id, []))
     await query_groq_with_messages(update, messages)
 
 async def query_groq_with_messages(update: Update, messages):
@@ -104,7 +110,7 @@ async def query_groq_with_messages(update: Update, messages):
     }
     payload = {
         "model": "llama-3.2-11b-vision-preview",
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+        "messages": messages
     }
 
     try:
@@ -113,7 +119,6 @@ async def query_groq_with_messages(update: Update, messages):
             resp.raise_for_status()
             reply = resp.json()["choices"][0]["message"]["content"]
 
-        # Simpen ke history cuma kalau bukan pesan gambar
         chat_id = update.effective_chat.id
         if len(messages) > 0 and isinstance(messages[-1]["content"], str):
             add_to_history(chat_id, {"role": "assistant", "content": reply})
@@ -128,8 +133,6 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-
-    print("Bot AI jalan...")
     app.run_polling()
 
 if __name__ == "__main__":
