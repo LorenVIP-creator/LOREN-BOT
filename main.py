@@ -1,4 +1,5 @@
 import os
+import base64
 from groq import Groq
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -7,61 +8,96 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 client = Groq(api_key=GROQ_API_KEY)
-chat_context = {}
+chat_context = {} # Nyimpen prompt + history per user
 
-SYSTEM_PROMPT = """Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩.
-Paham semua konteks percakapan dan file. Ikuti perintah user 100% tanpa nanya balik.
-Jawab langsung, pinter, natural, Bahasa Indonesia santai."""
+DEFAULT_PROMPT = "Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩. Jawab langsung, pinter, natural, Bahasa Indonesia santai. Kalau ada foto, analisis fotonya dan jawab sesuai keluhan user."
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_context[update.effective_chat.id] = {"file_content": None}
-    await update.message.reply_text("Halo, saya asisten AI LOREN MOD VIP 🇮🇩")
+    chat_context[update.effective_chat.id] = {
+        "system_prompt": DEFAULT_PROMPT,
+        "history": []
+    }
+    await update.message.reply_text(
+        "Halo Saya Asisten Ai Yang Di Rancang Di Hidupkan Oleh LOREN MOD VIP 🇮🇩\n\n"
+        "Ada Yang Bisa Saya Bantu?\n"
+        "Kirim foto + teks kalau mau komplain."
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    text = update.message.text or update.message.caption or ""
-    ctx = chat_context.get(chat_id, {"file_content": None})
 
-    if update.message.document:
-        doc = update.message.document
-        if doc.file_name.lower().endswith((".txt", ".pdf")):
-            file = await context.bot.get_file(doc.file_id)
-            file_bytes = await file.download_as_bytearray()
-            try:
-                if doc.file_name.lower().endswith(".txt"):
-                    file_text = file_bytes.decode("utf-8", errors="ignore")
-                else:
-                    from PyPDF2 import PdfReader
-                    from io import BytesIO
-                    reader = PdfReader(BytesIO(file_bytes))
-                    file_text = "".join(page.extract_text() or "" for page in reader.pages[:20])
-                ctx["file_content"] = file_text[:12000]
-                chat_context[chat_id] = ctx
-            except Exception as e:
-                await update.message.reply_text(f"Gagal baca file: {e}")
-                return
+    # Init context kalau belum ada
+    if chat_id not in chat_context:
+        chat_context[chat_id] = {"system_prompt": DEFAULT_PROMPT, "history": []}
+    ctx = chat_context[chat_id]
 
-    full_prompt = SYSTEM_PROMPT
-    if ctx["file_content"]:
-        full_prompt += f"\n\nKONTEKS FILE:\n{ctx['file_content']}"
-    full_prompt += f"\n\nUSER: {text}"
+    # 1. Upload file.txt = ganti prompt
+    if update.message.document and update.message.document.file_name.lower().endswith(".txt"):
+        file = await context.bot.get_file(update.message.document.file_id)
+        file_bytes = await file.download_as_bytearray()
+        new_prompt = file_bytes.decode("utf-8", errors="ignore")[:12000]
+        ctx["system_prompt"] = new_prompt
+        ctx["history"] = []
+        await update.message.reply_text("✅ Prompt baru aktif. Sekarang bot nurut 100% ke file lu.")
+        return
+
+    # 2. Siapkan konten pesan untuk Groq
+    messages = [{"role": "system", "content": ctx["system_prompt"]}]
+    messages.extend(ctx["history"][-10:]) # history text aja
+
+    content = []
+    user_text = update.message.caption or update.message.text or ""
+
+    # 3. Kalau ada foto, convert ke base64
+    if update.message.photo:
+        photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+        photo_bytes = await photo_file.download_as_bytearray()
+        base64_image = base64.b64encode(photo_bytes).decode("utf-8")
+
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+        })
+
+        if user_text:
+            content.append({"type": "text", "text": user_text})
+        else:
+            content.append({"type": "text", "text": "Analisis foto ini dan jelaskan masalahnya."})
+
+        messages.append({"role": "user", "content": content})
+
+    # 4. Kalau cuma teks
+    elif user_text:
+        messages.append({"role": "user", "content": user_text})
+        ctx["history"].append({"role": "user", "content": user_text})
+
+    else:
+        return
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
         response = client.chat.completions.create(
-            messages=[{"role": "user", "content": full_prompt}],
-            model="llama-3.3-70b-versatile", # Model aktif sekarang
+            messages=messages,
+            model="llama-3.3-70b-versatile", # Model ini support vision
             temperature=0.7,
             max_tokens=2048
         )
-        await update.message.reply_text(response.choices[0].message.content)
+
+        ai_reply = response.choices[0].message.content
+        ctx["history"].append({"role": "assistant", "content": ai_reply})
+
+        await update.message.reply_text(ai_reply)
+
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT | filters.CAPTION | filters.Document.ALL, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_message))
+    app.add_handler(MessageHandler(filters.Document.TXT, handle_message))
     app.run_polling()
 
 if __name__ == "__main__":
