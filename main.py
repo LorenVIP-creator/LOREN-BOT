@@ -1,6 +1,7 @@
 import os
 import time
 import httpx
+from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from groq import Groq
@@ -11,9 +12,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 client = Groq(api_key=GROQ_API_KEY)
 user_cooldown = {}
+user_history = defaultdict(list)
+user_system_prompt = defaultdict(str)
 
 def search_web(query):
-    """Search pake DuckDuckGo pakai httpx, nggak nambah dependency"""
     try:
         url = f"https://api.duckgo.com/?q={query}&format=json&no_html=1"
         with httpx.Client(timeout=5) as client:
@@ -32,48 +34,59 @@ def search_web(query):
         return ""
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Bot jalan. Sekarang udah bisa cari info 2025-2026.")
+    await update.message.reply_text(
+        "Halo Saya Asisten Ai Yang Di Rancang Di Hidupkan Oleh LOREN MOD VIP 🇮🇩\n\n"
+        "Ada Yang Bisa Saya Bantu?\n"
+        "Ini saya belum tersedia untuk kirim foto. Jika mau komplain bisa sebutkan aja dengan teks dan yang detail. "
+        "Masalah anda atau bisa copy masalahnya kesini biar saya bantu solusinya."
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     now = time.time()
 
     if user_id in user_cooldown:
-        if now - user_cooldown[user_id] < 10:
-            await update.message.reply_text("Tunggu 10 detik dulu bro")
+        if now - user_cooldown[user_id] < 10: # <- ganti jadi 10 detik
+            await update.message.reply_text("Tunggu 10 detik dulu bro") # <- ganti teksnya juga
             return
     user_cooldown[user_id] = now
 
     user_msg = update.message.text
+    user_history[user_id].append({"role": "user", "content": user_msg})
 
-    keywords = ["2024", "2025", "2026", "terbaru", "sekarang", "hari ini", "kemarin", "harga", "berita", "juara"]
+    if len(user_history[user_id]) > 10:
+        user_history[user_id] = user_history[user_id][-10:]
+
+    keywords = ["2024", "2025", "2026", "terbaru", "sekarang", "hari ini", "kemarin", "harga", "berita", "juara", "update"]
     needs_search = any(k in user_msg.lower() for k in keywords)
 
-    context_text = user_msg
+    messages = []
+
+    if user_system_prompt[user_id]:
+        messages.append({"role": "system", "content": user_system_prompt[user_id]})
+
     if needs_search:
         search_result = search_web(user_msg)
         if search_result:
-            context_text = f"Info terbaru dari web:\n{search_result}\n\nPertanyaan user: {user_msg}"
+            messages.append({"role": "system", "content": f"Info terbaru dari web:\n{search_result}"})
+
+    messages.extend(user_history[user_id])
 
     try:
         response = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{"role": "user", "content": context_text}],
-            max_tokens=1024
+            model="llama-3.1-8b-instant",
+            messages=messages,
+            max_tokens=1500,
+            temperature=0.7
         )
-        await update.message.reply_text(response.choices[0].message.content)
+        reply = response.choices[0].message.content
+        user_history[user_id].append({"role": "assistant", "content": reply})
+        await update.message.reply_text(reply)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    now = time.time()
-
-    if user_id in user_cooldown:
-        if now - user_cooldown[user_id] < 10:
-            await update.message.reply_text("Tunggu 10 detik dulu bro")
-            return
-    user_cooldown[user_id] = now
 
     file = await update.message.document.get_file()
     file_path = f"/tmp/{update.message.document.file_name}"
@@ -85,15 +98,18 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for page in reader.pages:
             text += page.extract_text() or ""
 
-        if len(text) > 8000:
-            text = text[:8000]
+        if len(text) > 12000:
+            text = text[:12000]
+
+        user_system_prompt[user_id] = text
 
         response = client.chat.completions.create(
-            model="llama3-8b-8192",
-            messages=[{"role": "user", "content": f"Rangkum ini: {text}"}],
-            max_tokens=1024
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": f"Rangkum dan konfirmasi kamu paham instruksi ini. Setelah ini ikuti semua perintah user sesuai instruksi:\n{text}"}],
+            max_tokens=800
         )
-        await update.message.reply_text(response.choices[0].message.content)
+        await update.message.reply_text(f"File kebaca ✅\n\n{response.choices[0].message.content}")
+
     except Exception as e:
         await update.message.reply_text(f"Gagal baca PDF: {e}")
 
