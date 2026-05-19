@@ -8,7 +8,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 client = Groq(api_key=GROQ_API_KEY)
-chat_context = {} # Nyimpen prompt + history per user
+chat_context = {}
 
 DEFAULT_PROMPT = "Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩. Jawab langsung, pinter, natural, Bahasa Indonesia santai. Kalau ada foto, analisis fotonya dan jawab sesuai keluhan user."
 
@@ -41,51 +41,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Prompt baru aktif. Sekarang bot nurut 100% ke file lu.")
         return
 
-    # 2. Siapkan konten pesan untuk Groq
-    messages = [{"role": "system", "content": ctx["system_prompt"]}]
-    messages.extend(ctx["history"][-10:]) # history text aja
-
-    content = []
     user_text = update.message.caption or update.message.text or ""
-
-    # 3. Kalau ada foto, convert ke base64
-    if update.message.photo:
-        photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
-        photo_bytes = await photo_file.download_as_bytearray()
-        base64_image = base64.b64encode(photo_bytes).decode("utf-8")
-
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-        })
-
-        if user_text:
-            content.append({"type": "text", "text": user_text})
-        else:
-            content.append({"type": "text", "text": "Analisis foto ini dan jelaskan masalahnya."})
-
-        messages.append({"role": "user", "content": content})
-
-    # 4. Kalau cuma teks
-    elif user_text:
-        messages.append({"role": "user", "content": user_text})
-        ctx["history"].append({"role": "user", "content": user_text})
-
-    else:
-        return
+    messages = [{"role": "system", "content": ctx["system_prompt"]}]
 
     try:
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
+        # 2. Kalau ada foto, kirim tanpa history biar gak error
+        if update.message.photo:
+            photo_file = await context.bot.get_file(update.message.photo[-1].file_id)
+            photo_bytes = await photo_file.download_as_bytearray()
+            base64_image = base64.b64encode(photo_bytes).decode("utf-8")
+
+            content = [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}},
+                {"type": "text", "text": user_text or "Analisis foto ini dan jelaskan masalahnya."}
+            ]
+            messages.append({"role": "user", "content": content})
+
+        # 3. Kalau cuma teks, baru pake history
+        else:
+            messages.extend(ctx["history"][-10:])
+            messages.append({"role": "user", "content": user_text})
+            ctx["history"].append({"role": "user", "content": user_text})
+
         response = client.chat.completions.create(
             messages=messages,
-            model="llama-3.3-70b-versatile", # Model ini support vision
+            model="llama-3.3-70b-versatile",
             temperature=0.7,
             max_tokens=2048
         )
 
         ai_reply = response.choices[0].message.content
-        ctx["history"].append({"role": "assistant", "content": ai_reply})
+
+        # Simpen reply ke history cuma kalau bukan pesan foto
+        if not update.message.photo:
+            ctx["history"].append({"role": "assistant", "content": ai_reply})
 
         await update.message.reply_text(ai_reply)
 
