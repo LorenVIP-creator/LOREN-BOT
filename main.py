@@ -5,6 +5,7 @@ import httpx
 from collections import defaultdict
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ChatAction
 from groq import Groq
 from PyPDF2 import PdfReader
 
@@ -77,7 +78,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages.extend(user_history[user_id])
 
     try:
-        await asyncio.sleep(10) # delay 10 detik sebelum bales
+        # Tampilkan "sedang mengetik" selama 10 detik
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+        await asyncio.sleep(10)
 
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -89,7 +92,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_history[user_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
 
-        user_cooldown[user_id] = time.time() # set cooldown setelah bales
+        user_cooldown[user_id] = time.time()
 
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
