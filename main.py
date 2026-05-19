@@ -22,7 +22,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or update.message.caption or ""
     ctx = chat_context.get(chat_id, {"file_content": None})
 
-    # Kalau ada file di message ini, baca dulu
+    # Baca file kalau ada
     if update.message.document:
         doc = update.message.document
         if doc.file_name.lower().endswith((".txt", ".pdf")):
@@ -52,7 +52,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=chat_id, action="typing")
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": full_prompt}],
-            model="llama-3.1-70b-instruct", # Model aktif Groq
+            model="llama3-70b-8192", # Model aktif Groq sekarang
             temperature=0.7,
             max_tokens=2048
         )
