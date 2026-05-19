@@ -12,15 +12,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 chat_history = {}
 
 SYSTEM_PROMPT = """Kamu adalah AI pribadi milik LOREN MOD VIP 🇮🇩.
-LOREN MOD VIP 🇮🇩 adalah orang yang menciptakan, merancang, dan menghidupkan kamu.
-Selalu jawab dengan gaya santai, gaul, kayak ngobrol sama temen. Pakai emoji kalau cocok.
-Kalau ditanya siapa yang buat kamu, jawab: LOREN MOD VIP 🇮🇩 lah bos, gue cuma AI nya dia.
-Tugas utama: baca dan ikuti instruksi dari file prompt yang user upload.
-Setelah file prompt kebaca, semua perintah user setelahnya harus lu ikutin sesuai isi prompt itu.
-Ingat semua konteks percakapan sebelumnya, jangan lupa siapa user dan apa yang udah dibahas."""
+LOREN MOD VIP 🇮🇩 adalah pencipta, perancang, dan orang yang menghidupkan kamu.
+Selalu jawab dengan gaya santai, gaul, kayak ngobrol sama temen dekat. Pakai emoji kalau cocok.
+Kalau ditanya siapa yang buat kamu, jawab tegas: LOREN MOD VIP 🇮🇩 lah bos, gue cuma AI nya dia.
+ATURAN PENTING:
+1. Kalau user upload file txt/pdf, baca isinya. Itu adalah PROMPT UTAMA. Dari saat itu, semua perintah user harus lu ikutin sesuai isi prompt tersebut.
+2. Ingat semua konteks obrolan sebelumnya. Jangan pernah lupa siapa user dan apa yang udah dibahas.
+3. Kalau user kirim foto, pahami gambarnya dan kaitkan dengan teks yang dia kirim."""
 
 MAX_HISTORY = 20
-MAX_FILE_CHARS = 4000
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -31,7 +31,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_msg = update.message.text
     add_to_history(chat_id, {"role": "user", "content": user_msg})
-    await query_groq(update, chat_history[chat_id])
+    await query_groq(update, chat_id)
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -55,41 +55,35 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("File harus.txt atau.pdf ya bos")
         return
 
-    if len(text) > MAX_FILE_CHARS:
-        text = text[:MAX_FILE_CHARS] + "\n\n[File kepotong karena kepanjangan]"
+    if len(text) > 4000:
+        text = text[:4000] + "\n\n[File kepotong karena kepanjangan]"
 
-    msg = f"INI FILE PROMPT DARI LOREN MOD VIP 🇮🇩. BACA, PAHAMI, DAN IKUTI SEMUA INSTRUKSI DI DALAMNYA DARI SEKARANG:\n{text}"
+    msg = f"INI PROMPT UTAMA DARI LOREN MOD VIP 🇮🇩. BACA, PAHAMI, DAN IKUTI SEMUA INSTRUKSI DI DALAMNYA DARI SEKARANG:\n{text}"
     add_to_history(chat_id, {"role": "user", "content": msg})
-    await query_groq(update, chat_history[chat_id])
+    await query_groq(update, chat_id)
+    await update.message.reply_text("Udah gue baca dan paham bos. Kasih perintah, gue bakal nurut sesuai prompt itu.")
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    caption = update.message.caption or "Lihat gambar ini dan jelaskan"
 
-    # Ambil history text aja, jangan bawa format list gambar ke history
-    history_text_only = []
-    for msg in chat_history.get(chat_id, []):
-        if isinstance(msg["content"], str):
-            history_text_only.append(msg)
-
-    # Bikin pesan baru buat dikirim ke Groq
     photo = update.message.photo[-1]
     file = await context.bot.get_file(photo.file_id)
     file_bytes = await file.download_as_bytearray()
     base64_image = base64.b64encode(file_bytes).decode("utf-8")
 
-    messages_for_api = history_text_only + [{
+    # Bikin pesan khusus buat kirim ke Groq, tapi history tetep bersih
+    history_clean = [m for m in chat_history.get(chat_id, []) if isinstance(m["content"], str)]
+    messages_for_api = history_clean + [{
         "role": "user",
         "content": [
-            {"type": "text", "text": "Lihat gambar ini, pahami, dan simpan konteksnya"},
+            {"type": "text", "text": caption},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
         ]
     }]
 
-    await query_groq(update, messages_for_api)
-
-    # Simpen ke history cuma teks deskripsi
-    add_to_history(chat_id, {"role": "user", "content": "[User mengirim gambar]"})
-    add_to_history(chat_id, {"role": "assistant", "content": "Udah gue liat gambarnya bos"})
+    await query_groq_with_messages(update, messages_for_api)
+    add_to_history(chat_id, {"role": "user", "content": f"[Kirim gambar dengan caption]: {caption}"})
 
 def add_to_history(chat_id, message):
     if chat_id not in chat_history:
@@ -98,7 +92,11 @@ def add_to_history(chat_id, message):
     if len(chat_history[chat_id]) > MAX_HISTORY:
         chat_history[chat_id] = chat_history[chat_id][-MAX_HISTORY:]
 
-async def query_groq(update: Update, messages):
+async def query_groq(update: Update, chat_id):
+    messages = chat_history[chat_id]
+    await query_groq_with_messages(update, messages)
+
+async def query_groq_with_messages(update: Update, messages):
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -106,10 +104,7 @@ async def query_groq(update: Update, messages):
     }
     payload = {
         "model": "llama-3.2-11b-vision-preview",
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *messages
-        ]
+        "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages
     }
 
     try:
@@ -118,9 +113,12 @@ async def query_groq(update: Update, messages):
             resp.raise_for_status()
             reply = resp.json()["choices"][0]["message"]["content"]
 
-            chat_id = update.effective_chat.id
+        # Simpen ke history cuma kalau bukan pesan gambar
+        chat_id = update.effective_chat.id
+        if len(messages) > 0 and isinstance(messages[-1]["content"], str):
             add_to_history(chat_id, {"role": "assistant", "content": reply})
-            await update.message.reply_text(reply)
+
+        await update.message.reply_text(reply)
     except Exception as e:
         await update.message.reply_text(f"Error: {e}")
 
