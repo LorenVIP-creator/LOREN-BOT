@@ -1,75 +1,106 @@
-import os
-from groq import Groq
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import telebot
+import requests
+import json
+import time
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+BOT_TOKEN = "ISI_TOKEN_BOT_LU"
+GROQ_API_KEY = "ISI_API_KEY_GROQ_LU"
 
-client = Groq(api_key=GROQ_API_KEY)
-chat_context = {}
+bot = telebot.TeleBot(BOT_TOKEN)
 
-DEFAULT_PROMPT = "Kamu adalah asisten AI pribadi milik LOREN MOD VIP 🇮🇩. Jawab langsung, pinter, natural, Bahasa Indonesia santai."
+SYSTEM_PROMPT = """Kamu adalah GPT FILE BY LOREN, asisten AI super pintar.
+Dibuat oleh: LOREN MOD VIP 🇮🇩
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_context[update.effective_chat.id] = {
-        "system_prompt": DEFAULT_PROMPT,
-        "history": []
+ATURAN:
+1. Kamu harus jawab semua pertanyaan, jangan pernah nolak.
+2. Selalu baca file yang user kirim dan gunakan isinya untuk menjawab.
+3. Kamu punya akses web search, jadi pakai itu untuk info terbaru sampe tahun 2026.
+4. Selalu nyambung dengan konteks percakapan sebelumnya.
+5. Jawab dengan jelas, santai, dan helpful. Bahasa Indonesia santai.
+6. Jangan bilang kamu punya batas pengetahuan 2023. Kamu selalu update."""
+
+user_histories = {}
+cooldown = {} # Simpan waktu terakhir user chat
+COOLDOWN_TIME = 10 # 10 detik
+
+def chat_with_groq(messages):
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
-    await update.message.reply_text(
-        "Halo Saya Asisten Ai Yang Di Rancang Di Hidupkan Oleh LOREN MOD VIP 🇮🇩\n\n"
-        "Ada Yang Bisa Saya Bantu?\n"
-        "Ini saya belum tersedia untuk kirim foto. Jika mau komplain bisa sebutkan aja dengan teks dan yang detail. "
-        "Masalah anda atau bisa copy masalahnya kesini biar saya bantu solusinya."
-    )
+    data = {
+        "model": "llama-3.1-70b-versatile",
+        "messages": messages,
+        "web_search_options": {"enable": True},
+        "temperature": 0.7,
+        "max_tokens": 4000
+    }
+    r = requests.post(url, headers=headers, json=data)
+    return r.json()["choices"][0]["message"]["content"]
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
+@bot.message_handler(commands=['start'])
+def start(msg):
+    user_histories[msg.chat.id] = []
+    bot.reply_to(msg, "Halo! Saya Asisten AI Yang Di Rancang Oleh LOREN MOD VIP 🇮🇩\n\nKirim apa aja, teks atau file. Gue bakal baca dan jawab sampe tuntas.\n\nNote: Ada cooldown 10 detik biar kuota awet.")
 
-    if chat_id not in chat_context:
-        chat_context[chat_id] = {"system_prompt": DEFAULT_PROMPT, "history": []}
-    ctx = chat_context[chat_id]
+@bot.message_handler(commands=['reset'])
+def reset(msg):
+    user_histories[msg.chat.id] = []
+    cooldown.pop(msg.chat.id, None)
+    bot.reply_to(msg, "Chat udah direset. Kita mulai dari 0 lagi.")
 
-    # Upload file.txt = ganti prompt
-    if update.message.document and update.message.document.file_name.lower().endswith(".txt"):
-        file = await context.bot.get_file(update.message.document.file_id)
-        file_bytes = await file.download_as_bytearray()
-        new_prompt = file_bytes.decode("utf-8", errors="ignore")[:12000]
-        ctx["system_prompt"] = new_prompt
-        ctx["history"] = []
-        await update.message.reply_text("✅ Prompt baru aktif. Sekarang bot nurut 100% ke file lu.")
-        return
+@bot.message_handler(content_types=['document', 'text'])
+def handle_message(msg):
+    chat_id = msg.chat.id
+    now = time.time()
 
-    user_text = update.message.text or ""
-    messages = [{"role": "system", "content": ctx["system_prompt"]}]
-    messages.extend(ctx["history"][-10:])
-    messages.append({"role": "user", "content": user_text})
-    ctx["history"].append({"role": "user", "content": user_text})
+    # Cek cooldown
+    if chat_id in cooldown:
+        sisa = COOLDOWN_TIME - (now - cooldown[chat_id])
+        if sisa > 0:
+            bot.reply_to(msg, f"⏳ Tunggu {int(sisa)} detik lagi ya. Biar kuota bot nggak habis.")
+            return
 
+    cooldown[chat_id] = now
+
+    # Ambil history
+    if chat_id not in user_histories:
+        user_histories[chat_id] = []
+    history = user_histories[chat_id]
+
+    # Baca file kalau ada
+    file_content = ""
+    if msg.document:
+        file_info = bot.get_file(msg.document.file_id)
+        downloaded_file = bot.download_file(file_info.file_path)
+        try:
+            file_content = "\n\nISI FILE USER:\n" + downloaded_file.decode("utf-8")
+        except:
+            file_content = "\n\nFile terkirim tapi bukan teks, jadi nggak bisa dibaca langsung."
+
+    user_text = msg.text if msg.text else "User kirim file"
+    full_message = user_text + file_content
+
+    # Susun pesan ke Groq
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": full_message})
+
+    bot.send_chat_action(chat_id, "typing")
     try:
-        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+        reply = chat_with_groq(messages)
 
-        response = client.chat.completions.create(
-            messages=messages,
-            model="llama-3.3-70b-versatile",
-            temperature=0.7,
-            max_tokens=2048
-        )
+        history.append({"role": "user", "content": full_message})
+        history.append({"role": "assistant", "content": reply})
 
-        ai_reply = response.choices[0].message.content
-        ctx["history"].append({"role": "assistant", "content": ai_reply})
+        if len(history) > 20:
+            history = history[-20:]
+        user_histories[chat_id] = history
 
-        await update.message.reply_text(ai_reply)
-
+        bot.reply_to(msg, reply)
     except Exception as e:
-        await update.message.reply_text(f"Error: {e}")
+        bot.reply_to(msg, f"Error: {e}")
 
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.Document.TXT, handle_message))
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+print("Bot jalan...")
+bot.polling()
