@@ -1,106 +1,109 @@
-import telebot
-import requests
-import json
+import os
 import time
+import httpx
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from groq import Groq
+from PyPDF2 import PdfReader
 
-BOT_TOKEN = "ISI_TOKEN_BOT_LU"
-GROQ_API_KEY = "ISI_API_KEY_GROQ_LU"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-bot = telebot.TeleBot(BOT_TOKEN)
+client = Groq(api_key=GROQ_API_KEY)
+user_cooldown = {}
 
-SYSTEM_PROMPT = """Kamu adalah GPT FILE BY LOREN, asisten AI super pintar.
-Dibuat oleh: LOREN MOD VIP 🇮🇩
+def search_web(query):
+    """Search pake DuckDuckGo pakai httpx, nggak nambah dependency"""
+    try:
+        url = f"https://api.duckgo.com/?q={query}&format=json&no_html=1"
+        with httpx.Client(timeout=5) as client:
+            r = client.get(url)
+            data = r.json()
 
-ATURAN:
-1. Kamu harus jawab semua pertanyaan, jangan pernah nolak.
-2. Selalu baca file yang user kirim dan gunakan isinya untuk menjawab.
-3. Kamu punya akses web search, jadi pakai itu untuk info terbaru sampe tahun 2026.
-4. Selalu nyambung dengan konteks percakapan sebelumnya.
-5. Jawab dengan jelas, santai, dan helpful. Bahasa Indonesia santai.
-6. Jangan bilang kamu punya batas pengetahuan 2023. Kamu selalu update."""
+        if data.get("AbstractText"):
+            return data["AbstractText"]
+        if data.get("Answer"):
+            return data["Answer"]
+        if data.get("RelatedTopics"):
+            topics = [t["Text"] for t in data["RelatedTopics"] if "Text" in t]
+            return "\n".join(topics[:3])
+        return ""
+    except:
+        return ""
 
-user_histories = {}
-cooldown = {} # Simpan waktu terakhir user chat
-COOLDOWN_TIME = 10 # 10 detik
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Bot jalan. Sekarang udah bisa cari info 2025-2026.")
 
-def chat_with_groq(messages):
-    url = "https://api.groq.com/openai/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "model": "llama-3.1-70b-versatile",
-        "messages": messages,
-        "web_search_options": {"enable": True},
-        "temperature": 0.7,
-        "max_tokens": 4000
-    }
-    r = requests.post(url, headers=headers, json=data)
-    return r.json()["choices"][0]["message"]["content"]
-
-@bot.message_handler(commands=['start'])
-def start(msg):
-    user_histories[msg.chat.id] = []
-    bot.reply_to(msg, "Halo! Saya Asisten AI Yang Di Rancang Oleh LOREN MOD VIP 🇮🇩\n\nKirim apa aja, teks atau file. Gue bakal baca dan jawab sampe tuntas.\n\nNote: Ada cooldown 10 detik biar kuota awet.")
-
-@bot.message_handler(commands=['reset'])
-def reset(msg):
-    user_histories[msg.chat.id] = []
-    cooldown.pop(msg.chat.id, None)
-    bot.reply_to(msg, "Chat udah direset. Kita mulai dari 0 lagi.")
-
-@bot.message_handler(content_types=['document', 'text'])
-def handle_message(msg):
-    chat_id = msg.chat.id
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     now = time.time()
 
-    # Cek cooldown
-    if chat_id in cooldown:
-        sisa = COOLDOWN_TIME - (now - cooldown[chat_id])
-        if sisa > 0:
-            bot.reply_to(msg, f"⏳ Tunggu {int(sisa)} detik lagi ya. Biar kuota bot nggak habis.")
+    if user_id in user_cooldown:
+        if now - user_cooldown[user_id] < 10:
+            await update.message.reply_text("Tunggu 10 detik dulu bro")
             return
+    user_cooldown[user_id] = now
 
-    cooldown[chat_id] = now
+    user_msg = update.message.text
 
-    # Ambil history
-    if chat_id not in user_histories:
-        user_histories[chat_id] = []
-    history = user_histories[chat_id]
+    keywords = ["2024", "2025", "2026", "terbaru", "sekarang", "hari ini", "kemarin", "harga", "berita", "juara"]
+    needs_search = any(k in user_msg.lower() for k in keywords)
 
-    # Baca file kalau ada
-    file_content = ""
-    if msg.document:
-        file_info = bot.get_file(msg.document.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        try:
-            file_content = "\n\nISI FILE USER:\n" + downloaded_file.decode("utf-8")
-        except:
-            file_content = "\n\nFile terkirim tapi bukan teks, jadi nggak bisa dibaca langsung."
+    context_text = user_msg
+    if needs_search:
+        search_result = search_web(user_msg)
+        if search_result:
+            context_text = f"Info terbaru dari web:\n{search_result}\n\nPertanyaan user: {user_msg}"
 
-    user_text = msg.text if msg.text else "User kirim file"
-    full_message = user_text + file_content
-
-    # Susun pesan ke Groq
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": full_message})
-
-    bot.send_chat_action(chat_id, "typing")
     try:
-        reply = chat_with_groq(messages)
-
-        history.append({"role": "user", "content": full_message})
-        history.append({"role": "assistant", "content": reply})
-
-        if len(history) > 20:
-            history = history[-20:]
-        user_histories[chat_id] = history
-
-        bot.reply_to(msg, reply)
+        response = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": context_text}],
+            max_tokens=1024
+        )
+        await update.message.reply_text(response.choices[0].message.content)
     except Exception as e:
-        bot.reply_to(msg, f"Error: {e}")
+        await update.message.reply_text(f"Error: {e}")
 
-print("Bot jalan...")
-bot.polling()
+async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    now = time.time()
+
+    if user_id in user_cooldown:
+        if now - user_cooldown[user_id] < 10:
+            await update.message.reply_text("Tunggu 10 detik dulu bro")
+            return
+    user_cooldown[user_id] = now
+
+    file = await update.message.document.get_file()
+    file_path = f"/tmp/{update.message.document.file_name}"
+    await file.download_to_drive(file_path)
+
+    try:
+        reader = PdfReader(file_path)
+        text = ""
+        for page in reader.pages:
+            text += page.extract_text() or ""
+
+        if len(text) > 8000:
+            text = text[:8000]
+
+        response = client.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": f"Rangkum ini: {text}"}],
+            max_tokens=1024
+        )
+        await update.message.reply_text(response.choices[0].message.content)
+    except Exception as e:
+        await update.message.reply_text(f"Gagal baca PDF: {e}")
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.Document.PDF, handle_pdf))
+    print("Bot started")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
